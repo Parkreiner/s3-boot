@@ -2,12 +2,14 @@ package main
 
 import (
 	"database/sql"
-	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
 	"log"
 	"net/http"
+	"os"
+	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
@@ -36,8 +38,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
-
 	dbVideoDraft, err := cfg.db.GetVideo(videoID)
 	if err == sql.ErrNoRows {
 		respondWithError(
@@ -48,6 +48,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		)
 		return
 	}
+
+	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
 	err = r.ParseMultipartForm(maxMemory10Megabytes)
 	if err != nil {
@@ -61,7 +63,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	file, fileHeader, err := r.FormFile("thumbnail")
+	reqFile, reqFileHeader, err := r.FormFile("thumbnail")
 	if err != nil {
 		respondWithError(
 			w,
@@ -71,7 +73,7 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		)
 		return
 	}
-	mediaType := fileHeader.Header.Get("Content-Type")
+	mediaType := reqFileHeader.Header.Get("Content-Type")
 	if mediaType == "" {
 		msg := "Thumbnail is missing media type"
 		respondWithError(
@@ -82,19 +84,50 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		)
 		return
 	}
-	bytes, err := io.ReadAll(file)
-	if err != nil {
+	_, fileExtension, ok := strings.Cut(mediaType, "/")
+	if !ok {
 		respondWithError(
 			w,
-			http.StatusInternalServerError,
-			"Unable to store thumbnail",
-			err,
+			http.StatusBadRequest,
+			"Image payload ",
+			nil,
 		)
 		return
 	}
 
-	dataUrl := "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(bytes)
-	dbVideoDraft.ThumbnailURL = &dataUrl
+	fPath := filepath.Join(cfg.assetsRoot, videoID.String()+"."+strings.ToLower(fileExtension))
+	newFile, err := os.Create(fPath)
+	if err != nil {
+		respondWithError(
+			w,
+			http.StatusInternalServerError,
+			"Unable to create new file",
+			err,
+		)
+		return
+	}
+	defer func() {
+		err := newFile.Close()
+		if err != nil {
+			fmt.Printf("Unable to close file %s", newFile.Name())
+		}
+	}()
+	newFile.Chmod(0664)
+	_, err = io.Copy(newFile, reqFile)
+	if err != nil {
+		respondWithError(
+			w,
+			http.StatusInternalServerError,
+			"Unable to copy file contents",
+			nil,
+		)
+	}
+
+	clientPath := fPath
+	if !strings.HasPrefix(clientPath, "/") {
+		clientPath = "/" + clientPath
+	}
+	dbVideoDraft.ThumbnailURL = &clientPath
 	dbVideoDraft.UpdatedAt = time.Now()
 	err = cfg.db.UpdateVideo(dbVideoDraft)
 	if err != nil {
