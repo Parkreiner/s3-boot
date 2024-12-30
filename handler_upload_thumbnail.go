@@ -1,12 +1,19 @@
 package main
 
 import (
+	"database/sql"
+	"errors"
 	"fmt"
+	"io"
+	"log"
 	"net/http"
+	"time"
 
 	"github.com/bootdotdev/learn-file-storage-s3-golang-starter/internal/auth"
 	"github.com/google/uuid"
 )
+
+const maxMemory10Megabytes = 10 << 20
 
 func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Request) {
 	videoIDString := r.PathValue("videoID")
@@ -28,10 +35,81 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-
 	fmt.Println("uploading thumbnail for video", videoID, "by user", userID)
 
-	// TODO: implement the upload here
+	dbVideoDraft, err := cfg.db.GetVideo(videoID)
+	if err == sql.ErrNoRows {
+		respondWithError(
+			w,
+			http.StatusNotFound,
+			fmt.Sprintf("Unable to find video with ID %s", videoID),
+			err,
+		)
+		return
+	}
 
-	respondWithJSON(w, http.StatusOK, struct{}{})
+	err = r.ParseMultipartForm(maxMemory10Megabytes)
+	if err != nil {
+		log.Printf("Unable to parse multi-part form with memory budget %d\n", maxMemory10Megabytes)
+		respondWithError(
+			w,
+			http.StatusBadRequest,
+			"Unable to parse thumbnail request",
+			err,
+		)
+		return
+	}
+
+	file, fileHeader, err := r.FormFile("thumbnail")
+	if err != nil {
+		respondWithError(
+			w,
+			http.StatusBadRequest,
+			"Unable to parse thumbnail payload",
+			err,
+		)
+		return
+	}
+	mediaType := fileHeader.Header.Get("Content-Type")
+	if mediaType == "" {
+		msg := "Thumbnail is missing media type"
+		respondWithError(
+			w,
+			http.StatusBadRequest,
+			msg,
+			errors.New(msg),
+		)
+		return
+	}
+	bytes, err := io.ReadAll(file)
+	if err != nil {
+		respondWithError(
+			w,
+			http.StatusInternalServerError,
+			"Unable to store thumbnail",
+			err,
+		)
+		return
+	}
+
+	newUrl := "http://localhost:8091/api/thumbnails/" + videoID.String()
+	dbVideoDraft.ThumbnailURL = &newUrl
+	dbVideoDraft.UpdatedAt = time.Now()
+	err = cfg.db.UpdateVideo(dbVideoDraft)
+	if err != nil {
+		respondWithError(
+			w,
+			http.StatusInternalServerError,
+			"Unable to update thumbnail data",
+			err,
+		)
+		return
+	}
+
+	videoThumbnails[videoID] = thumbnail{
+		mediaType: mediaType,
+		data:      bytes,
+	}
+
+	respondWithJSON(w, http.StatusOK, dbVideoDraft)
 }
