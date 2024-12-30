@@ -2,6 +2,7 @@ package main
 
 import (
 	"database/sql"
+	"encoding/base64"
 	"errors"
 	"fmt"
 	"io"
@@ -92,8 +93,8 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	newUrl := "http://localhost:8091/api/thumbnails/" + videoID.String()
-	dbVideoDraft.ThumbnailURL = &newUrl
+	dataUrl := "data:" + mediaType + ";base64," + base64.StdEncoding.EncodeToString(bytes)
+	dbVideoDraft.ThumbnailURL = &dataUrl
 	dbVideoDraft.UpdatedAt = time.Now()
 	err = cfg.db.UpdateVideo(dbVideoDraft)
 	if err != nil {
@@ -104,11 +105,6 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 			err,
 		)
 		return
-	}
-
-	videoThumbnails[videoID] = thumbnail{
-		mediaType: mediaType,
-		data:      bytes,
 	}
 
 	respondWithJSON(w, http.StatusOK, dbVideoDraft)
