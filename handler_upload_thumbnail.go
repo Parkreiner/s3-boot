@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"mime"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -73,7 +74,16 @@ func (cfg *apiConfig) handlerUploadThumbnail(w http.ResponseWriter, r *http.Requ
 		)
 		return
 	}
-	mediaType := reqFileHeader.Header.Get("Content-Type")
+	mediaType, _, err := mime.ParseMediaType(reqFileHeader.Header.Get("Content-Type"))
+	if err != nil || (mediaType != "image/jpeg" && mediaType != "image/png") {
+		respondWithError(
+			w,
+			http.StatusBadRequest,
+			"Image must be either .png or .jpeg",
+			err,
+		)
+		return
+	}
 	if mediaType == "" {
 		msg := "Thumbnail is missing media type"
 		respondWithError(
